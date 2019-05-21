@@ -141,9 +141,9 @@ namespace Nop.Services.Plugins
             if (string.IsNullOrEmpty(dependsOnSystemName))
                 return true;
 
-            return pluginDescriptor.DependsOn?.Any(systemName => systemName.Equals(dependsOnSystemName, StringComparison.InvariantCultureIgnoreCase)) ?? false;
+            return pluginDescriptor.DependsOn?.Contains(dependsOnSystemName) ?? false;
         }
-
+        
         #endregion
 
         #region Methods
@@ -176,7 +176,8 @@ namespace Nop.Services.Plugins
                 pluginDescriptors = pluginDescriptors.Where(descriptor => typeof(TPlugin).IsAssignableFrom(descriptor.PluginType));
 
             //order by group name
-            pluginDescriptors = pluginDescriptors.OrderBy(descriptor => descriptor.Group).ToList();
+            pluginDescriptors = pluginDescriptors.OrderBy(descriptor => descriptor.Group)
+                .ThenBy(descriptor => descriptor.DisplayOrder).ToList();
 
             return pluginDescriptors;
         }
@@ -196,7 +197,7 @@ namespace Nop.Services.Plugins
             Customer customer = null, int storeId = 0, string group = null) where TPlugin : class, IPlugin
         {
             return GetPluginDescriptors<TPlugin>(loadMode, customer, storeId, group)
-                .FirstOrDefault(descriptor => descriptor.SystemName.Equals(systemName, StringComparison.InvariantCultureIgnoreCase));
+                .FirstOrDefault(descriptor => descriptor.SystemName.Equals(systemName));
         }
 
         /// <summary>
@@ -268,14 +269,17 @@ namespace Nop.Services.Plugins
             if (_pluginsInfo.PluginNamesToInstall.Any(item => item.SystemName == systemName))
                 return;
 
+            var pluginsAfterRestart = _pluginsInfo.InstalledPluginNames.Where(installedSystemName => !_pluginsInfo.PluginNamesToUninstall.Contains(installedSystemName)).ToList();
+            pluginsAfterRestart.AddRange(_pluginsInfo.PluginNamesToInstall.Select(item => item.SystemName));
+
             if (checkDependencies)
             {
                 var descriptor = GetPluginDescriptorBySystemName<IPlugin>(systemName, LoadPluginsMode.NotInstalledOnly);
 
                 if (descriptor.DependsOn?.Any() ?? false)
                 {
-                    var dependsOn = descriptor.DependsOn.Where(dependsOnSystemName =>
-                        !_pluginsInfo.InstalledPluginNames.Contains(dependsOnSystemName)).ToList();
+                    var dependsOn = descriptor.DependsOn
+                        .Where(dependsOnSystemName => !pluginsAfterRestart.Contains(dependsOnSystemName)).ToList();
 
                     if (dependsOn.Any())
                     {
@@ -314,7 +318,7 @@ namespace Nop.Services.Plugins
 
                 foreach (var dependentPlugin in dependentPlugins)
                 {
-                    if (!_pluginsInfo.InstalledPluginNames.Any(installedSystemName => installedSystemName.Equals(dependentPlugin.SystemName, StringComparison.InvariantCultureIgnoreCase)))
+                    if (!_pluginsInfo.InstalledPluginNames.Contains(dependentPlugin.SystemName))
                         continue;
 
                     dependsOn.Add(string.IsNullOrEmpty(dependentPlugin.FriendlyName)
@@ -337,7 +341,7 @@ namespace Nop.Services.Plugins
                 }
             }
 
-            var plugin = GetPluginDescriptorBySystemName<IPlugin>(systemName)?.Instance<IPlugin>();
+            var plugin = descriptor?.Instance<IPlugin>();
             plugin?.PreparePluginToUninstall();
 
             _pluginsInfo.PluginNamesToUninstall.Add(systemName);
@@ -400,7 +404,7 @@ namespace Nop.Services.Plugins
             var customerActivityService = EngineContext.Current.Resolve<ICustomerActivityService>();
 
             //install plugins
-            foreach (var descriptor in pluginDescriptors)
+            foreach (var descriptor in pluginDescriptors.OrderBy(pluginDescriptor => pluginDescriptor.DisplayOrder))
             {
                 try
                 {
